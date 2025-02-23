@@ -3,7 +3,9 @@ import mongoose from "mongoose";
 import cors from "cors";
 import { configDotenv } from "dotenv";
 import bodyParser from "body-parser";
-import subscribeRouter from "./routes/subscribeRouter.js";
+import userRouter from "./routes/userRoutes.js";
+import historyUsageRouter from "./routes/historyUsageRoutes.js";
+import internetOfThingRouter from "./routes/internetOfThingRoutes.js";
 
 const app = express();
 const port = 8000;
@@ -26,7 +28,9 @@ app.get("/", (req, res) => {
   });
 });
 
-app.use("/subscribe", subscribeRouter);
+app.use("/auth", userRouter);
+app.use("/history", historyUsageRouter);
+app.use("/tool", internetOfThingRouter);
 
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
