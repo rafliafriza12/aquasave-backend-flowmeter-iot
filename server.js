@@ -16,11 +16,21 @@ app.use(cors());
 app.use(express.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 
-mongoose.connect(`${process.env.DB_URI}`);
-const db = mongoose.connection;
-db.on("error", (err) => console.log(err));
-db.once("open", () => console.log("database connected..."));
+const clientOptions = {
+  serverApi: { version: "1", strict: true, deprecationErrors: true },
+};
 
+async function connectDB() {
+  try {
+    await mongoose.connect(process.env.DB_URI, clientOptions);
+    console.log(
+      "Pinged your deployment. You successfully connected to MongoDB!"
+    );
+  } catch (error) {
+    console.error("Koneksi ke MongoDB gagal:", error);
+    process.exit(1); // Keluar dari proses jika koneksi gagal
+  }
+}
 app.get("/", (req, res) => {
   res.status(200).json({
     status: 200,
@@ -32,6 +42,10 @@ app.use("/auth", userRouter);
 app.use("/history", historyUsageRouter);
 app.use("/tool", internetOfThingRouter);
 
-app.listen(port, () => {
-  console.log(`Server running on port ${port}`);
-});
+connectDB()
+  .then(() => {
+    app.listen(port, () => {
+      console.log(`Server running on port ${port}`);
+    });
+  })
+  .catch(console.dir);
