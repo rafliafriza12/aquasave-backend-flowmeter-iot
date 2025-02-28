@@ -57,41 +57,63 @@ export const createHistory = async (req, res) => {
     });
 
     sensorTool.totalUsedWater += usedWater;
+    await sensorTool.save();
+    await history.save();
 
-    // Check if totalUsedWater is a multiple of 500
-    if (sensorTool.totalUsedWater % 500 === 0) {
-      const today = new Date();
-      const startOfDay = new Date(today.setHours(0, 0, 0, 0));
-      const endOfDay = new Date(today.setHours(23, 59, 59, 999));
+    // Cek akumulasi penggunaan air hari ini
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
 
-      // Check if a notification for today already exists
+    const totalUsageToday = await HistoryUsage.aggregate([
+      {
+        $match: {
+          userId,
+          internetOfThingId,
+          createdAt: { $gte: today },
+        },
+      },
+      { $group: { _id: null, totalUsedWater: { $sum: "$usedWater" } } },
+    ]);
+
+    let notification = null;
+    console.log(totalUsageToday);
+    // Hanya buat notifikasi jika:
+    // 1. Ada penggunaan air hari ini
+    // 2. Total penggunaan >= 500 liter
+    if (
+      totalUsageToday.length > 0 &&
+      totalUsageToday[0].totalUsedWater >= 500
+    ) {
+      // Cek apakah notifikasi sudah dibuat hari ini
       const existingNotification = await Notification.findOne({
         userId,
-        createdAt: { $gte: startOfDay, $lt: endOfDay },
+        title: "Peringatan Penggunaan Air Berlebih!",
+        createdAt: { $gte: today },
       });
 
+      // Buat notifikasi baru jika belum ada notifikasi hari ini
       if (!existingNotification) {
-        const notification = new Notification({
+        notification = new Notification({
           userId,
           title: "Peringatan Penggunaan Air Berlebih!",
-          message: `Total penggunaan air anda hari ini telah mencapai 500 liter.`,
+          message: `Penggunaan air Anda hari ini telah mencapai ${totalUsageToday[0].totalUsedWater} liter. Harap hemat air!`,
         });
         await notification.save();
       }
     }
 
-    await sensorTool.save();
-    await history.save();
-
     return res.status(201).json({
       status: 201,
       data: history,
+      notification,
       message: "Riwayat penggunaan air tercatat",
     });
   } catch (error) {
+    console.error("Error in createHistory:", error);
     return res.status(500).json({
       status: 500,
       message: "Terjadi kesalahan pada server",
+      error: error.message,
     });
   }
 };
@@ -118,9 +140,9 @@ export const getHistories = async (req, res) => {
         startDate.setHours(0, 0, 0, 0);
         groupBy = {
           _id: {
-            time: {
+            hour: {
               $dateToString: {
-                format: "%H:00",
+                format: "%H",
                 date: "$createdAt",
                 timezone: "Asia/Jakarta",
               },
@@ -142,8 +164,15 @@ export const getHistories = async (req, res) => {
         startDate = new Date();
         startDate.setDate(1);
         startDate.setHours(0, 0, 0, 0);
+        // Untuk bulan, kita grouping berdasarkan minggu dalam bulan
         groupBy = {
-          _id: { month: { $month: "$createdAt" } },
+          _id: {
+            week: {
+              $ceil: {
+                $divide: [{ $dayOfMonth: "$createdAt" }, 7],
+              },
+            },
+          },
           totalUsedWater: { $sum: "$usedWater" },
         };
         break;
@@ -152,7 +181,7 @@ export const getHistories = async (req, res) => {
         startDate.setFullYear(startDate.getFullYear(), 0, 1);
         startDate.setHours(0, 0, 0, 0);
         groupBy = {
-          _id: { year: { $year: "$createdAt" } },
+          _id: { month: { $month: "$createdAt" } },
           totalUsedWater: { $sum: "$usedWater" },
         };
         break;
@@ -166,12 +195,18 @@ export const getHistories = async (req, res) => {
 
     // Eksekusi query history
     const histories = await HistoryUsage.aggregate([
-      { $match: { userId, internetOfThingId, createdAt: { $gte: startDate } } },
+      {
+        $match: {
+          userId: userId,
+          internetOfThingId: internetOfThingId,
+          createdAt: { $gte: startDate },
+        },
+      },
       { $group: groupBy },
       { $sort: { _id: 1 } },
     ]);
 
-    // Mapping hasil
+    // Array nama hari dan bulan
     const days = [
       "Minggu",
       "Senin",
@@ -196,59 +231,53 @@ export const getHistories = async (req, res) => {
       "Desember",
     ];
 
-    const mappedHistories = histories.map((item) => {
-      if (filter === "minggu") {
-        return { ...item, _id: { day: days[item._id.day - 1] } };
-      }
-      if (filter === "bulan") {
-        return { ...item, _id: { month: months[item._id.month - 1] } };
-      }
-      if (filter === "tahun") {
-        return { ...item, _id: { year: item._id.year } };
-      }
-      return item;
-    });
-
     // Prepare full data for the response based on the filter
     let fullData = [];
+
     if (filter === "hari") {
+      // Untuk data per jam dalam sehari
       for (let hour = 0; hour < 24; hour++) {
-        const hourData = mappedHistories.find(
-          (item) => item._id.time === `${hour}:00`
-        );
+        const hourStr = hour.toString().padStart(2, "0");
+        const hourData = histories.find((item) => item._id.hour === hourStr);
         fullData.push({
-          time: `${hour}:00`,
+          time: `${hourStr}:00`,
           totalUsedWater: hourData ? hourData.totalUsedWater : 0,
         });
       }
     } else if (filter === "minggu") {
-      for (let day = 1; day <= 7; day++) {
-        const dayData = mappedHistories.find((item) => item._id.day === day);
+      // Untuk data per hari dalam seminggu
+      for (let dayIndex = 0; dayIndex < 7; dayIndex++) {
+        // MongoDB $dayOfWeek mengembalikan 1-7 (1=Minggu, 7=Sabtu)
+        const dayValue = dayIndex + 1;
+        const dayData = histories.find((item) => item._id.day === dayValue);
         fullData.push({
-          time: days[day - 1],
+          time: days[dayIndex],
           totalUsedWater: dayData ? dayData.totalUsedWater : 0,
         });
       }
     } else if (filter === "bulan") {
-      for (let month = 1; month <= 12; month++) {
-        const monthData = mappedHistories.find(
-          (item) => item._id.month === month
-        );
+      // Menghitung jumlah minggu dalam bulan ini
+      const lastDayOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+      const totalWeeks = Math.ceil(lastDayOfMonth.getDate() / 7);
+
+      // Untuk data per minggu dalam sebulan
+      for (let week = 1; week <= totalWeeks; week++) {
+        const weekData = histories.find((item) => item._id.week === week);
         fullData.push({
-          time: months[month - 1],
-          totalUsedWater: monthData ? monthData.totalUsedWater : 0,
+          time: `Minggu ke-${week}`,
+          totalUsedWater: weekData ? weekData.totalUsedWater : 0,
         });
       }
     } else if (filter === "tahun") {
-      for (
-        let year = now.getFullYear();
-        year >= now.getFullYear() - 5;
-        year--
-      ) {
-        const yearData = mappedHistories.find((item) => item._id.year === year);
+      // Untuk data per bulan dalam setahun
+      for (let month = 0; month < 12; month++) {
+        const monthValue = month + 1; // MongoDB $month mengembalikan 1-12
+        const monthData = histories.find(
+          (item) => item._id.month === monthValue
+        );
         fullData.push({
-          time: year,
-          totalUsedWater: yearData ? yearData.totalUsedWater : 0,
+          time: months[month],
+          totalUsedWater: monthData ? monthData.totalUsedWater : 0,
         });
       }
     }
@@ -258,7 +287,13 @@ export const getHistories = async (req, res) => {
     today.setHours(0, 0, 0, 0);
 
     const totalUsageToday = await HistoryUsage.aggregate([
-      { $match: { userId, internetOfThingId, createdAt: { $gte: today } } },
+      {
+        $match: {
+          userId: userId,
+          internetOfThingId: internetOfThingId,
+          createdAt: { $gte: today },
+        },
+      },
       { $group: { _id: null, totalUsedWater: { $sum: "$usedWater" } } },
     ]);
 
@@ -292,6 +327,7 @@ export const getHistories = async (req, res) => {
       notification: notification ? notification : null,
     });
   } catch (error) {
+    console.error("Error in getHistories:", error);
     res.status(500).json({
       status: 500,
       message: "Terjadi kesalahan pada server",
