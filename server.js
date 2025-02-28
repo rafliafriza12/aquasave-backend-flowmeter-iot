@@ -6,7 +6,7 @@ import bodyParser from "body-parser";
 import userRouter from "./routes/userRoutes.js";
 import historyUsageRouter from "./routes/historyUsageRoutes.js";
 import internetOfThingRouter from "./routes/internetOfThingRoutes.js";
-
+import notificationRouter from "./routes/notificationRoutes.js";
 const app = express();
 const port = 8000;
 
@@ -41,6 +41,7 @@ app.get("/", (req, res) => {
 app.use("/auth", userRouter);
 app.use("/history", historyUsageRouter);
 app.use("/tool", internetOfThingRouter);
+app.use("/notification", notificationRouter);
 
 connectDB()
   .then(() => {

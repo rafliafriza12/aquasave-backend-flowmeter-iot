@@ -58,6 +58,28 @@ export const createHistory = async (req, res) => {
 
     sensorTool.totalUsedWater += usedWater;
 
+    // Check if totalUsedWater is a multiple of 500
+    if (sensorTool.totalUsedWater % 500 === 0) {
+      const today = new Date();
+      const startOfDay = new Date(today.setHours(0, 0, 0, 0));
+      const endOfDay = new Date(today.setHours(23, 59, 59, 999));
+
+      // Check if a notification for today already exists
+      const existingNotification = await Notification.findOne({
+        userId,
+        createdAt: { $gte: startOfDay, $lt: endOfDay },
+      });
+
+      if (!existingNotification) {
+        const notification = new Notification({
+          userId,
+          title: "Peringatan Penggunaan Air Berlebih!",
+          message: `Total penggunaan air anda hari ini telah mencapai 500 liter.`,
+        });
+        await notification.save();
+      }
+    }
+
     await sensorTool.save();
     await history.save();
 
@@ -121,16 +143,16 @@ export const getHistories = async (req, res) => {
         startDate.setDate(1);
         startDate.setHours(0, 0, 0, 0);
         groupBy = {
-          _id: { week: { $week: "$createdAt" } },
+          _id: { month: { $month: "$createdAt" } },
           totalUsedWater: { $sum: "$usedWater" },
         };
         break;
       case "tahun":
         startDate = new Date();
-        startDate.setMonth(0, 1);
+        startDate.setFullYear(startDate.getFullYear(), 0, 1);
         startDate.setHours(0, 0, 0, 0);
         groupBy = {
-          _id: { month: { $month: "$createdAt" } },
+          _id: { year: { $year: "$createdAt" } },
           totalUsedWater: { $sum: "$usedWater" },
         };
         break;
@@ -178,11 +200,58 @@ export const getHistories = async (req, res) => {
       if (filter === "minggu") {
         return { ...item, _id: { day: days[item._id.day - 1] } };
       }
-      if (filter === "tahun") {
+      if (filter === "bulan") {
         return { ...item, _id: { month: months[item._id.month - 1] } };
+      }
+      if (filter === "tahun") {
+        return { ...item, _id: { year: item._id.year } };
       }
       return item;
     });
+
+    // Prepare full data for the response based on the filter
+    let fullData = [];
+    if (filter === "hari") {
+      for (let hour = 0; hour < 24; hour++) {
+        const hourData = mappedHistories.find(
+          (item) => item._id.time === `${hour}:00`
+        );
+        fullData.push({
+          time: `${hour}:00`,
+          totalUsedWater: hourData ? hourData.totalUsedWater : 0,
+        });
+      }
+    } else if (filter === "minggu") {
+      for (let day = 1; day <= 7; day++) {
+        const dayData = mappedHistories.find((item) => item._id.day === day);
+        fullData.push({
+          time: days[day - 1],
+          totalUsedWater: dayData ? dayData.totalUsedWater : 0,
+        });
+      }
+    } else if (filter === "bulan") {
+      for (let month = 1; month <= 12; month++) {
+        const monthData = mappedHistories.find(
+          (item) => item._id.month === month
+        );
+        fullData.push({
+          time: months[month - 1],
+          totalUsedWater: monthData ? monthData.totalUsedWater : 0,
+        });
+      }
+    } else if (filter === "tahun") {
+      for (
+        let year = now.getFullYear();
+        year >= now.getFullYear() - 5;
+        year--
+      ) {
+        const yearData = mappedHistories.find((item) => item._id.year === year);
+        fullData.push({
+          time: year,
+          totalUsedWater: yearData ? yearData.totalUsedWater : 0,
+        });
+      }
+    }
 
     // Cek total penggunaan air hari ini
     const today = new Date();
@@ -219,7 +288,7 @@ export const getHistories = async (req, res) => {
     res.status(200).json({
       status: 200,
       filter,
-      data: mappedHistories,
+      data: fullData,
       notification: notification ? notification : null,
     });
   } catch (error) {
