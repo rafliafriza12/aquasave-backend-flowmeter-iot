@@ -16,21 +16,11 @@ app.use(cors());
 app.use(express.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 
-const clientOptions = {
-  serverApi: { version: "1", strict: true, deprecationErrors: true },
-};
+mongoose.connect(`mongodb://localhost:27017/aquasave`);
+const db = mongoose.connection;
+db.on("error", (err) => console.log(err));
+db.once("open", () => console.log("database connected..."));
 
-async function connectDB() {
-  try {
-    await mongoose.connect(process.env.DB_URI, clientOptions);
-    console.log(
-      "Pinged your deployment. You successfully connected to MongoDB!"
-    );
-  } catch (error) {
-    console.error("Koneksi ke MongoDB gagal:", error);
-    process.exit(1); // Keluar dari proses jika koneksi gagal
-  }
-}
 app.get("/", (req, res) => {
   res.status(200).json({
     status: 200,
@@ -43,10 +33,6 @@ app.use("/history", historyUsageRouter);
 app.use("/tool", internetOfThingRouter);
 app.use("/notification", notificationRouter);
 
-connectDB()
-  .then(() => {
-    app.listen(port, () => {
-      console.log(`Server running on port ${port}`);
-    });
-  })
-  .catch(console.dir);
+app.listen(port, () => {
+  console.log(`Server running on port ${port}`);
+});
